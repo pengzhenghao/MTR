@@ -153,9 +153,9 @@ class MTREncoder(nn.Module):
         obj_trajs, obj_trajs_mask = input_dict['obj_trajs'].cuda(), input_dict['obj_trajs_mask'].cuda() 
         map_polylines, map_polylines_mask = input_dict['map_polylines'].cuda(), input_dict['map_polylines_mask'].cuda() 
 
-        obj_trajs_last_pos = input_dict['obj_trajs_last_pos'].cuda() 
-        map_polylines_center = input_dict['map_polylines_center'].cuda() 
-        track_index_to_predict = input_dict['track_index_to_predict']
+        obj_trajs_last_pos = input_dict['obj_trajs_last_pos'].cuda()  # [14, 55, 3]
+        map_polylines_center = input_dict['map_polylines_center'].cuda()  # [14, 768, 3]
+        track_index_to_predict = input_dict['track_index_to_predict']  # [14, ] in int.
 
         assert obj_trajs_mask.dtype == torch.bool and map_polylines_mask.dtype == torch.bool
 
@@ -185,15 +185,16 @@ class MTREncoder(nn.Module):
                 x=global_token_feature, x_mask=global_token_mask, x_pos=global_token_pos
             )
 
-        obj_polylines_feature = global_token_feature[:, :num_objects]
-        map_polylines_feature = global_token_feature[:, num_objects:]
+        obj_polylines_feature = global_token_feature[:, :num_objects]  # [14, 55, 256]
+        map_polylines_feature = global_token_feature[:, num_objects:]  # [14, 768, 256]
         assert map_polylines_feature.shape[1] == num_polylines
 
         # organize return features
+        # in shape [14, 256]
         center_objects_feature = obj_polylines_feature[torch.arange(num_center_objects), track_index_to_predict]
 
         batch_dict['center_objects_feature'] = center_objects_feature
-        batch_dict['obj_feature'] = obj_polylines_feature
+        batch_dict['obj_feature'] = obj_polylines_feature  #
         batch_dict['map_feature'] = map_polylines_feature
         batch_dict['obj_mask'] = obj_valid_mask
         batch_dict['map_mask'] = map_valid_mask
