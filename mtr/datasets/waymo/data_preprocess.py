@@ -131,8 +131,9 @@ def decode_map_features_from_proto(map_features):
             map_infos['speed_bump'].append(cur_info)
 
         else:
-            print(cur_data)
-            raise ValueError
+            print("ERROR: ", cur_data)
+            continue
+            # raise ValueError
 
         polylines.append(cur_polyline)
         cur_info['polyline_index'] = (point_cnt, point_cnt + len(cur_polyline))
@@ -221,8 +222,13 @@ def get_infos_from_protos(data_path, output_path=None, num_workers=8):
     src_files.sort()
 
     # func(src_files[0])
-    with multiprocessing.Pool(num_workers) as p:
-        data_infos = list(tqdm(p.imap(func, src_files), total=len(src_files)))
+    if num_workers > 1:
+        with multiprocessing.Pool(num_workers) as p:
+            data_infos = list(tqdm(p.imap(func, src_files), total=len(src_files)))
+    else:
+        data_infos = []
+        for f in src_files:
+            data_infos.append(func(f))
 
     all_infos = [item for infos in data_infos for item in infos]
     return all_infos
@@ -253,5 +259,5 @@ def create_infos_from_protos(raw_data_path, output_path, num_workers=16):
 if __name__ == '__main__':
     create_infos_from_protos(
         raw_data_path=sys.argv[1],
-        output_path=sys.argv[2]
+        output_path=sys.argv[2],
     )

@@ -9,6 +9,12 @@ conda create --name mtr python=3.8 -y
 conda activate mtr 
 ```
 
+**Step 1.1:**: PZH Note: Install pytorch by ourselves!
+
+```bash
+conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
+```
+
 **Step 2:** Install the required packages
 ```shell
 pip install -r requirements.txt
