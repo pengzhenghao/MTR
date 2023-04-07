@@ -102,6 +102,8 @@ class WaymoDataset(DatasetTemplate):
             obj_types=obj_types, scene_id=scene_id
         )
 
+        # PZH Note: center_objects is the location at this time steps of all agent-of-interests
+
         (obj_trajs_data, obj_trajs_mask, obj_trajs_pos, obj_trajs_last_pos, obj_trajs_future_state, obj_trajs_future_mask, center_gt_trajs,
             center_gt_trajs_mask, center_gt_final_valid_idx,
             track_index_to_predict_new, sdc_track_index_new, obj_types, obj_ids) = self.create_agent_data_for_center_objects(
@@ -152,6 +154,9 @@ class WaymoDataset(DatasetTemplate):
             self, center_objects, obj_trajs_past, obj_trajs_future, track_index_to_predict, sdc_track_index, timestamps,
             obj_types, obj_ids
         ):
+        """
+        TODO:
+        """
         obj_trajs_data, obj_trajs_mask, obj_trajs_future_state, obj_trajs_future_mask = self.generate_centered_trajs_for_agents(
             center_objects=center_objects, obj_trajs_past=obj_trajs_past,
             obj_types=obj_types, center_indices=track_index_to_predict,
@@ -201,12 +206,16 @@ class WaymoDataset(DatasetTemplate):
             track_index_to_predict_new, sdc_track_index_new, obj_types, obj_ids)
 
     def get_interested_agents(self, track_index_to_predict, obj_trajs_full, current_time_index, obj_types, scene_id):
+        """
+        Return the whole trajectory (complete) of the Agent-of-interest.
+        """
         center_objects_list = []
         track_index_to_predict_selected = []
 
         for k in range(len(track_index_to_predict)):
             obj_idx = track_index_to_predict[k]
 
+            # The Agent-of-interest should be valid at current frame.
             assert obj_trajs_full[obj_idx, current_time_index, -1] > 0, f'obj_idx={obj_idx}, scene_id={scene_id}'
 
             center_objects_list.append(obj_trajs_full[obj_idx, current_time_index])
@@ -219,6 +228,11 @@ class WaymoDataset(DatasetTemplate):
     @staticmethod
     def transform_trajs_to_center_coords(obj_trajs, center_xyz, center_heading, heading_index, rot_vel_index=None):
         """
+
+        PZH NOTE: Will ego-centralize and rotate everything to each Agent-of-interests.
+        Output will be in shape:
+        [num of center objects, num of objects, num of past time steps, 10-dim feature vector]
+
         Args:
             obj_trajs (num_objects, num_timestamps, num_attrs):
                 first three values of num_attrs are [x, y, z] or [x, y]
@@ -277,6 +291,7 @@ class WaymoDataset(DatasetTemplate):
         timestamps = torch.from_numpy(timestamps)
 
         # transform coordinates to the centered objects
+        # [num of center objects, num of objects, num of past time steps, 10 - dim feature vector]
         obj_trajs = self.transform_trajs_to_center_coords(
             obj_trajs=obj_trajs_past,
             center_xyz=center_objects[:, 0:3],
@@ -306,11 +321,25 @@ class WaymoDataset(DatasetTemplate):
         acce[:, :, 0, :] = acce[:, :, 1, :]
 
         ret_obj_trajs = torch.cat((
-            obj_trajs[:, :, :, 0:6], 
+
+            # [num center objects, num objects, past time steps, 6 our of 10-dim]
+            obj_trajs[:, :, :, 0:6],
+
+            # [num center objects, num objects, past time steps, 5]
+            # a one-hot vector saying "is_cyclist" "is_center_object" and so on.
             object_onehot_mask,
-            object_time_embedding, 
+
+            # [num center objects, num objects, past time steps, past time steps + 1]
+            object_time_embedding,
+
+            # [num center objects, num objects, past time steps, 2 (cos sin)]
             object_heading_embedding,
-            obj_trajs[:, :, :, 7:9], 
+
+            # [num center objects, num objects, past time steps, 2 our of 10-dim]
+            # NOTE: some values are discarded
+            obj_trajs[:, :, :, 7:9],
+
+            # [num center objects, num objects, past time steps, 2]
             acce,
         ), dim=-1)
 
@@ -319,6 +348,9 @@ class WaymoDataset(DatasetTemplate):
 
         ##  generate label for future trajectories
         obj_trajs_future = torch.from_numpy(obj_trajs_future).float()
+
+        # PZH NOTE: output in shape
+        # [num of center objects, num of objects, num of past time steps, 10-dim feature vector]
         obj_trajs_future = self.transform_trajs_to_center_coords(
             obj_trajs=obj_trajs_future,
             center_xyz=center_objects[:, 0:3],
@@ -334,6 +366,9 @@ class WaymoDataset(DatasetTemplate):
     @staticmethod
     def generate_batch_polylines_from_map(polylines, point_sampled_interval=1, vector_break_dist_thresh=1.0, num_points_each_polyline=20):
         """
+
+        PZH NOTE: vector_break_dist_thresh = one vector maximum length
+
         Args:
             polylines (num_points, 7): [x, y, z, dir_x, dir_y, dir_z, global_type]
 
@@ -343,17 +378,28 @@ class WaymoDataset(DatasetTemplate):
         """
         point_dim = polylines.shape[-1]
 
+
+        # PZH NOTE: Filter all points first! Do the downsample!
         sampled_points = polylines[::point_sampled_interval]
+
+        # PZH NOTE: This has potential bug, but nevern mind.
         sampled_points_shift = np.roll(sampled_points, shift=1, axis=0)
+
         buffer_points = np.concatenate((sampled_points[:, 0:2], sampled_points_shift[:, 0:2]), axis=-1) # [ed_x, ed_y, st_x, st_y]
         buffer_points[0, 2:4] = buffer_points[0, 0:2]
 
-        break_idxs = (np.linalg.norm(buffer_points[:, 0:2] - buffer_points[:, 2:4], axis=-1) > vector_break_dist_thresh).nonzero()[0]
+        dist = np.linalg.norm(buffer_points[:, 0:2] - buffer_points[:, 2:4], axis=-1)  # [num points]
+        break_idxs = (dist > vector_break_dist_thresh).nonzero()[0]
+
+        # PZH NOTE: A list of "points" in each "vector"!!!!! Very clever!!!
         polyline_list = np.array_split(sampled_points, break_idxs, axis=0)
         ret_polylines = []
         ret_polylines_mask = []
 
         def append_single_polyline(new_polyline):
+
+            # PZH: EQUALLY SIZED feature for each 1m vector.
+
             cur_polyline = np.zeros((num_points_each_polyline, point_dim), dtype=np.float32)
             cur_valid_mask = np.zeros((num_points_each_polyline), dtype=np.int32)
             cur_polyline[:len(new_polyline)] = new_polyline
@@ -365,6 +411,10 @@ class WaymoDataset(DatasetTemplate):
             if polyline_list[k].__len__() <= 0:
                 continue
             for idx in range(0, len(polyline_list[k]), num_points_each_polyline):
+
+                # PZH NOTE: Just take the first "num points" from each polyline.
+                # This is similar to TrafficGen.
+                # PZH TODO: Why? Wouldn't it better to do interpolation?
                 append_single_polyline(polyline_list[k][idx: idx + num_points_each_polyline])
 
         ret_polylines = np.stack(ret_polylines, axis=0)
@@ -414,6 +464,8 @@ class WaymoDataset(DatasetTemplate):
             neighboring_polylines[neighboring_polyline_valid_mask == 0] = 0
             return neighboring_polylines, neighboring_polyline_valid_mask
 
+        # in shape [20410, 7]
+        # all_polylines(num_points, 7): [x, y, z, dir_x, dir_y, dir_z, global_type]
         polylines = torch.from_numpy(map_infos['all_polylines'].copy())
         center_objects = torch.from_numpy(center_objects)
 

@@ -10,7 +10,7 @@ import pickle
 import tensorflow as tf
 import multiprocessing
 import glob
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from waymo_open_dataset.protos import scenario_pb2
 from waymo_types import object_type, lane_type, road_line_type, road_edge_type, signal_state, polyline_type
 
@@ -131,7 +131,7 @@ def decode_map_features_from_proto(map_features):
             map_infos['speed_bump'].append(cur_info)
 
         else:
-            print("ERROR: ", cur_data)
+            # print("ERROR: ", cur_data)
             continue
             # raise ValueError
 
@@ -260,4 +260,6 @@ if __name__ == '__main__':
     create_infos_from_protos(
         raw_data_path=sys.argv[1],
         output_path=sys.argv[2],
+
+        # num_workers=1
     )
