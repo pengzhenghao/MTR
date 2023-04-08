@@ -36,23 +36,23 @@ class MTRDecoder(nn.Module):
         )
         self.in_proj_obj, self.obj_decoder_layers = self.build_transformer_decoder(
             in_channels=in_channels,
-            d_model=self.d_model,
+            d_model=self.d_model,  # 512
             nhead=self.model_cfg.NUM_ATTN_HEAD,
             dropout=self.model_cfg.get('DROPOUT_OF_ATTN', 0.1),
             num_decoder_layers=self.num_decoder_layers,
-            use_local_attn=False
+            use_local_attn=False  # Look at this!!!! TODO
         )
 
-        map_d_model = self.model_cfg.get('MAP_D_MODEL', self.d_model)
+        map_d_model = self.model_cfg.get('MAP_D_MODEL', self.d_model)  # 256
         self.in_proj_map, self.map_decoder_layers = self.build_transformer_decoder(
             in_channels=in_channels,
-            d_model=map_d_model,
+            d_model=map_d_model,  # 256
             nhead=self.model_cfg.NUM_ATTN_HEAD,
             dropout=self.model_cfg.get('DROPOUT_OF_ATTN', 0.1),
             num_decoder_layers=self.num_decoder_layers,
-            use_local_attn=True
+            use_local_attn=True  # Look at this!!!! TODO
         )
-        if map_d_model != self.d_model:
+        if map_d_model != self.d_model:  # TRUE! Since map_d_model = 256, self.d_model = 512
             temp_layer = nn.Linear(self.d_model, map_d_model)
             self.map_query_content_mlps = nn.ModuleList([copy.deepcopy(temp_layer) for _ in range(self.num_decoder_layers)])
             self.map_query_embed_mlps = nn.Linear(self.d_model, map_d_model)
@@ -104,7 +104,8 @@ class MTRDecoder(nn.Module):
 
         decoder_layer = transformer_decoder_layer.TransformerDecoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, dropout=dropout,
-            activation="relu", normalize_before=False, keep_query_pos=False,
+            activation="relu", normalize_before=False,
+            keep_query_pos=False,  # Not using Query Position (but use for the first decoder layer)
             rm_self_attn_decoder=False, use_local_attn=use_local_attn
         )
         decoder_layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(num_decoder_layers)])
@@ -147,6 +148,12 @@ class MTRDecoder(nn.Module):
         return motion_reg_heads, motion_cls_heads, motion_vel_heads
 
     def apply_dense_future_prediction(self, obj_feature, obj_mask, obj_pos):
+        """
+        PZH NOTE: This function will add the predicted future trajectory into object feature.
+
+        obj_feature = num center objects, num objects, D
+
+        """
         num_center_objects, num_objects, _ = obj_feature.shape
 
         # dense future prediction
@@ -158,7 +165,9 @@ class MTRDecoder(nn.Module):
         pred_dense_trajs_valid = self.dense_future_head(obj_fused_feature_valid)
         pred_dense_trajs_valid = pred_dense_trajs_valid.view(pred_dense_trajs_valid.shape[0], self.num_future_frames, 7)
 
+        # TODO FIXME: So you will predict the relative position in the "future prediction module"?
         temp_center = pred_dense_trajs_valid[:, :, 0:2] + obj_pos_valid[:, None, 0:2]
+
         pred_dense_trajs_valid = torch.cat((temp_center, pred_dense_trajs_valid[:, :, 2:]), dim=-1)
 
         # future feature encoding and fuse to past obj_feature
@@ -173,6 +182,8 @@ class MTRDecoder(nn.Module):
 
         ret_pred_dense_future_trajs = obj_feature.new_zeros(num_center_objects, num_objects, self.num_future_frames, 7)
         ret_pred_dense_future_trajs[obj_mask] = pred_dense_trajs_valid
+
+        # Wow, you record the future trajectory here!
         self.forward_ret_dict['pred_dense_trajs'] = ret_pred_dense_future_trajs
 
         return ret_obj_feature, ret_pred_dense_future_trajs
@@ -307,33 +318,46 @@ class MTRDecoder(nn.Module):
 
         pred_list = []
         for layer_idx in range(self.num_decoder_layers):
-            # query object feature
+
+
+            # ===== Object Attention =====
+            # Not using local attention.
+            # Q: cat [query_content (+ intention_query PE in first layer), dynamic_query_center PE]
+            # K: cat [obj_feature (+ obj_pos PE in first layer), obj_pos PE]
+            # V: obj_feature
             obj_query_feature = self.apply_cross_attention(
                 kv_feature=obj_feature, kv_mask=obj_mask, kv_pos=obj_pos,
                 query_content=query_content, query_embed=intention_query,
                 attention_layer=self.obj_decoder_layers[layer_idx],
-                dynamic_query_center=dynamic_query_center,
+                dynamic_query_center=dynamic_query_center,  # This is the Query Position!
                 layer_idx=layer_idx
-            ) 
+                # PZH NOTE: Here they don't use local attention!!!!!
+            )
 
             # query map feature
             collected_idxs, base_map_idxs = self.apply_dynamic_map_collection(
                 map_pos=map_pos, map_mask=map_mask,
                 pred_waypoints=pred_waypoints,
-                base_region_offset=self.model_cfg.CENTER_OFFSET_OF_MAP,
+                base_region_offset=self.model_cfg.CENTER_OFFSET_OF_MAP, # TODO: What is this CENTER OFFSET = 30m????
                 num_waypoint_polylines=self.model_cfg.NUM_WAYPOINT_MAP_POLYLINES,
                 num_base_polylines=self.model_cfg.NUM_BASE_MAP_POLYLINES,
                 base_map_idxs=base_map_idxs,
                 num_query=num_query
             )
 
+
+            # ===== Map Attention =====
+            # Using local attention.
+            # Q: cat [query_content (+ intention_query PE in first layer), dynamic_query_center PE]
+            # K: cat [k-nearest map_feature (+ map_pos PE in first layer), map_pos PE]
+            # V: map_feature
             map_query_feature = self.apply_cross_attention(
                 kv_feature=map_feature, kv_mask=map_mask, kv_pos=map_pos,
                 query_content=query_content, query_embed=intention_query,
                 attention_layer=self.map_decoder_layers[layer_idx],
                 layer_idx=layer_idx,
                 dynamic_query_center=dynamic_query_center,
-                use_local_attn=True,
+                use_local_attn=True,  # Here they use local!!!!!
                 query_index_pair=collected_idxs,
                 query_content_pre_mlp=self.map_query_content_mlps[layer_idx],
                 query_embed_pre_mlp=self.map_query_embed_mlps
@@ -516,12 +540,15 @@ class MTRDecoder(nn.Module):
         num_polylines = map_feature.shape[1]
 
         # input projection
-        center_objects_feature = self.in_proj_center_obj(center_objects_feature)
-        obj_feature_valid = self.in_proj_obj(obj_feature[obj_mask])
+        center_objects_feature = self.in_proj_center_obj(center_objects_feature)  # This is an MLP
+
+        obj_feature_valid = self.in_proj_obj(obj_feature[obj_mask])  # This is a transformer decoder
+        # [num center objects, num polylines, 512]
         obj_feature = obj_feature.new_zeros(num_center_objects, num_objects, obj_feature_valid.shape[-1])
         obj_feature[obj_mask] = obj_feature_valid
 
         map_feature_valid = self.in_proj_map(map_feature[map_mask])
+        # [num center objects, num polylines, 256]
         map_feature = map_feature.new_zeros(num_center_objects, num_polylines, map_feature_valid.shape[-1])
         map_feature[map_mask] = map_feature_valid
 
@@ -529,11 +556,17 @@ class MTRDecoder(nn.Module):
         obj_feature, pred_dense_future_trajs = self.apply_dense_future_prediction(
             obj_feature=obj_feature, obj_mask=obj_mask, obj_pos=obj_pos
         )
+
         # decoder layers
         pred_list = self.apply_transformer_decoder(
             center_objects_feature=center_objects_feature,
             center_objects_type=input_dict['center_objects_type'],
             obj_feature=obj_feature, obj_mask=obj_mask, obj_pos=obj_pos,
+
+            # PZH NOTE: The "obj_pos" here is not = pred_future_trajs
+            # PZH NOTE: Would that be useful to use future traj
+            #  as the "Key Position Embedding"?
+
             map_feature=map_feature, map_mask=map_mask, map_pos=map_pos
         )
 
