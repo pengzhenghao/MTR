@@ -395,6 +395,8 @@ class MTRDecoder(nn.Module):
             assert pred_trajs.shape[-1] == 7
             pred_trajs_gmm, pred_vel = pred_trajs[:, :, :, 0:5], pred_trajs[:, :, :, 5:7]
 
+            # print("=== pred_scores: ", pred_scores.shape, "pred_trajs_gmm: ", pred_trajs_gmm.shape)
+
             loss_reg_gmm, center_gt_positive_idx = loss_utils.nll_loss_gmm_direct(
                 pred_scores=pred_scores, pred_trajs=pred_trajs_gmm,
                 gt_trajs=center_gt_trajs[:, :, 0:2], gt_valid_mask=center_gt_trajs_mask,

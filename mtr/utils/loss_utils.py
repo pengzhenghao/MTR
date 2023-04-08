@@ -41,10 +41,11 @@ def nll_loss_gmm_direct(pred_scores, pred_trajs, gt_trajs, gt_valid_mask, pre_ne
     dx = res_trajs[:, :, 0]
     dy = res_trajs[:, :, 1]
 
-    if use_square_gmm:
-        log_std1 = log_std2 = torch.clip(nearest_trajs[:, :, 2], min=log_std_range[0], max=log_std_range[1])
-        std1 = std2 = torch.exp(log_std1)   # (0.2m to 150m)
-        rho = torch.zeros_like(log_std1)
+    if use_square_gmm:  # FALSE
+        raise ValueError()
+        # log_std1 = log_std2 = torch.clip(nearest_trajs[:, :, 2], min=log_std_range[0], max=log_std_range[1])
+        # std1 = std2 = torch.exp(log_std1)   # (0.2m to 150m)
+        # rho = torch.zeros_like(log_std1)
     else:
         log_std1 = torch.clip(nearest_trajs[:, :, 2], min=log_std_range[0], max=log_std_range[1])
         log_std2 = torch.clip(nearest_trajs[:, :, 3], min=log_std_range[0], max=log_std_range[1])
