@@ -47,15 +47,22 @@ class PointNetPolylineEncoder(nn.Module):
         polylines_feature[polylines_mask] = polylines_feature_valid
 
         # get global feature
+        # PZH NOTE: polylines_feature is in shape [T, num poly, num points, D]
         pooled_feature = polylines_feature.max(dim=2)[0]
+        # PZH NOTE: pooled_feature is in shape [T, num poly, D]
+
+        # PZH NOTE: Concat [T, num poly, num points, D] with [T, num poly, 1 * numpoints, D]
+        # PZH NOTE: = [T, num poly, num points, 2D], D = hidden dim = 256
         polylines_feature = torch.cat((polylines_feature, pooled_feature[:, :, None, :].repeat(1, 1, num_points_each_polylines, 1)), dim=-1)
 
-        # mlp
+        # PZH NOTE: [T, num poly, num points, 2D] -> [T, num poly, num points, D]
         polylines_feature_valid = self.mlps(polylines_feature[polylines_mask])
+        # PZH NOTE: feature_buffers in shape [T, num poly, num points, D]
         feature_buffers = polylines_feature.new_zeros(batch_size, num_polylines, num_points_each_polylines, polylines_feature_valid.shape[-1])
         feature_buffers[polylines_mask] = polylines_feature_valid
 
         # max-pooling
+        # PZH NOTE: [T, num poly, num points, D] -> [T, num poly, D]
         feature_buffers = feature_buffers.max(dim=2)[0]  # (batch_size, num_polylines, C)
         
         # out-mlp 
@@ -64,4 +71,6 @@ class PointNetPolylineEncoder(nn.Module):
             feature_buffers_valid = self.out_mlps(feature_buffers[valid_mask])  # (N, C)
             feature_buffers = feature_buffers.new_zeros(batch_size, num_polylines, feature_buffers_valid.shape[-1])
             feature_buffers[valid_mask] = feature_buffers_valid
+
+        # PZH NOTE: in shape [T, num poly, D_MODEL (256 for encoder 512 for decoder)]
         return feature_buffers

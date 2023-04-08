@@ -30,9 +30,9 @@ class MTREncoder(nn.Module):
         self.map_polyline_encoder = self.build_polyline_encoder(
             in_channels=self.model_cfg.NUM_INPUT_ATTR_MAP,
             hidden_dim=self.model_cfg.NUM_CHANNEL_IN_MLP_MAP,
-            num_layers=self.model_cfg.NUM_LAYER_IN_MLP_MAP,
-            num_pre_layers=self.model_cfg.NUM_LAYER_IN_PRE_MLP_MAP,
-            out_channels=self.model_cfg.D_MODEL
+            num_layers=self.model_cfg.NUM_LAYER_IN_MLP_MAP,  # PZH NOTE: totally 5 layers, 3 in pre layers, 2 in out.
+            num_pre_layers=self.model_cfg.NUM_LAYER_IN_PRE_MLP_MAP,  # = 3
+            out_channels=self.model_cfg.D_MODEL  # 2
         )
 
         # build transformer encoder layers
