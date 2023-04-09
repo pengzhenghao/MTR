@@ -57,7 +57,9 @@ __global__ void knn_batch_cuda_(int n, int m, int k, const float *__restrict__ x
 }
 
 
-__global__ void knn_batch_mlogk_cuda_(int n, int m, int k, const float *__restrict__ xyz, const float *__restrict__ query_xyz, const int *__restrict__ batch_idxs, const int *__restrict__ query_batch_offsets, int *__restrict__ idx) {
+__global__ void knn_batch_mlogk_cuda_(int n, int m, int k, const float *__restrict__ xyz,
+const float *__restrict__ query_xyz, const int *__restrict__ batch_idxs, const int *__restrict__ query_batch_offsets,
+int *__restrict__ idx) {
     int pt_idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (pt_idx >= n) return;
 

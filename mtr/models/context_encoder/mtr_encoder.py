@@ -15,6 +15,43 @@ from mtr.utils import common_utils
 from mtr.ops.knn import knn_utils
 
 
+def find_k_nearest_neighbors(pos, K, valid_mask):
+    """
+    Find the K-nearest neighbors of all vehicles, excluding invalid vehicles.
+
+    Args:
+        pos (torch.Tensor): Position tensor of shape [B, N, 3].
+        K (int): The number of nearest neighbors to find.
+        valid_mask (torch.Tensor): Boolean mask tensor of shape [B, N], where True indicates valid vehicles.
+
+    Returns:
+        (torch.Tensor): Indices matrix of shape [B, N, K].
+    """
+    B, N, _ = pos.shape
+
+    INF = 1000000
+
+    # Adjust the valid_mask tensor to match the shape of pairwise_distances
+    invalid_mask_expanded = (~valid_mask).unsqueeze(-1).expand(B, N, N)
+
+    pos[(~valid_mask).unsqueeze(-1).expand(B, N, 3)] = INF
+
+    # Compute pairwise distances using cdist
+    pairwise_distances = torch.cdist(pos, pos, p=2)
+
+    # Set diagonal elements and invalid vehicle distances to a large value
+    diag_indices = torch.arange(N, device=pos.device)
+    pairwise_distances[:, diag_indices, diag_indices] = INF
+
+    # Set distances for invalid vehicles to infinity
+    pairwise_distances[invalid_mask_expanded] = INF
+
+    # Find indices of the K-nearest neighbors using topk
+    _, indices = torch.topk(pairwise_distances, K, dim=2, largest=False)
+
+    return indices.int()
+
+
 class MTREncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -112,15 +149,34 @@ class MTREncoder(nn.Module):
         # filter invalid elements
         x_stack = x_stack_full[x_mask_stack]
         x_pos_stack = x_pos_stack_full[x_mask_stack]
+
+        # It is in shape (BS * N,). It record the batch index of each selected "map feat".
         batch_idxs = batch_idxs_full[x_mask_stack]
 
         # knn
+        # batch_offsets is in shape (bs + 1,)
+        # It record:
+        # batch_offsets[0] = 0
+        # batch_offsets[1] = how many map feat's index == 0?
+        # batch_offsets[2] = how many map feat's index == 0 or 1?
+        # batch_offsets[i+1] = batch_offsets[i] + (batch_idxs==i).sum()
         batch_offsets = common_utils.get_batch_offsets(batch_idxs=batch_idxs, bs=batch_size).int()  # (batch_size + 1)
+
+        # in shape (bs,)
+        # how many map_feat's index==i
         batch_cnt = batch_offsets[1:] - batch_offsets[:-1]
 
-        index_pair = knn_utils.knn_batch_mlogk(
-            x_pos_stack, x_pos_stack,  batch_idxs, batch_offsets, num_of_neighbors
-        )  # (num_valid_elems, K)
+
+        # PZH NOTE: We abadon the old implementation which requires additional CUDA code compliation.
+        # After testing, in a 3090, the new implementation takes 10s to finish 10,000 operation with (9000, 16) output.
+        # While the old implementation takes 5s. Their results are compatible.
+        # I think it is accepetable to use native pytorch impl at the cost of a little overhead.
+
+        # index_pair = knn_utils.knn_batch_mlogk(
+        #     x_pos_stack, x_pos_stack,  batch_idxs, batch_offsets, num_of_neighbors
+        # )  # (num_valid_elems, K)
+
+        index_pair = find_k_nearest_neighbors(pos=x_pos, K=num_of_neighbors, valid_mask=x_mask)[x_mask]
 
         # positional encoding
         pos_embedding = position_encoding_utils.gen_sineembed_for_position(x_pos_stack[None, :, 0:2], hidden_dim=d_model)[0]
