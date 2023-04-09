@@ -12,7 +12,7 @@ import torch.nn as nn
 from mtr.models.utils.transformer import transformer_encoder_layer, position_encoding_utils
 from mtr.models.utils import polyline_encoder
 from mtr.utils import common_utils
-from mtr.ops.knn import knn_utils
+# from mtr.ops.knn import knn_utils
 
 
 def find_k_nearest_neighbors(pos, K, valid_mask):
@@ -48,7 +48,7 @@ def find_k_nearest_neighbors(pos, K, valid_mask):
     # Find indices of the K-nearest neighbors using topk
     _, indices = torch.topk(pairwise_distances, K, dim=2, largest=False)
 
-    return indices.int()
+    return indices[valid_mask].int()
 
 
 class MTREncoder(nn.Module):
@@ -175,7 +175,8 @@ class MTREncoder(nn.Module):
         #     x_pos_stack, x_pos_stack,  batch_idxs, batch_offsets, num_of_neighbors
         # )  # (num_valid_elems, K)
 
-        index_pair = find_k_nearest_neighbors(pos=x_pos, K=num_of_neighbors, valid_mask=x_mask)[x_mask]
+        # [Number of valid elements, K]
+        index_pair = find_k_nearest_neighbors(pos=x_pos, K=num_of_neighbors, valid_mask=x_mask)
 
         # positional encoding
         pos_embedding = position_encoding_utils.gen_sineembed_for_position(x_pos_stack[None, :, 0:2], hidden_dim=d_model)[0]
