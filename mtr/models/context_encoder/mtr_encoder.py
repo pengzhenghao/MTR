@@ -29,19 +29,18 @@ def find_k_nearest_neighbors(pos, K, valid_mask):
     """
     B, N, _ = pos.shape
 
-    INF = 1000000
-
-    # Adjust the valid_mask tensor to match the shape of pairwise_distances
-    invalid_mask_expanded = (~valid_mask).unsqueeze(-1).expand(B, N, N)
-
-    pos[(~valid_mask).unsqueeze(-1).expand(B, N, 3)] = INF
+    INF = float("+inf")
 
     # Compute pairwise distances using cdist
     pairwise_distances = torch.cdist(pos, pos, p=2)
 
+    # NOTE: We will include "itself" into "K-neighbors".
     # Set diagonal elements and invalid vehicle distances to a large value
-    diag_indices = torch.arange(N, device=pos.device)
-    pairwise_distances[:, diag_indices, diag_indices] = INF
+    # diag_indices = torch.arange(N, device=pos.device)
+    # pairwise_distances[:, diag_indices, diag_indices] = INF
+
+    # Adjust the valid_mask tensor to match the shape of pairwise_distances
+    invalid_mask_expanded = (~valid_mask).unsqueeze(-1).expand(B, N, N)
 
     # Set distances for invalid vehicles to infinity
     pairwise_distances[invalid_mask_expanded] = INF
