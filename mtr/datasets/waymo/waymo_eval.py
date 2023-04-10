@@ -10,7 +10,7 @@ import os
 
 from google.protobuf import text_format
 
-all_gpus = tf.config.experimental.list_physical_devices('GPU')
+all_gpus = tf.test.gpu_device_name()
 if all_gpus:
     try:
         for cur_gpu in all_gpus:

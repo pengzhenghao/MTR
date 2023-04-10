@@ -48,8 +48,8 @@ class WaymoDataset(DatasetTemplate):
             for idx, cur_track_index in enumerate(cur_info['tracks_to_predict']['track_index']):
                 valid_mask.append(cur_info['tracks_to_predict']['object_type'][idx] in valid_object_types)
 
-            valid_mask = np.array(valid_mask) > 0
-            if valid_mask.sum() == 0:
+            valid_mask = [v > 0 for v in valid_mask]
+            if sum(valid_mask) == 0:
                 continue
 
             assert len(cur_info['tracks_to_predict'].keys()) == 3, f"{cur_info['tracks_to_predict'].keys()}"
