@@ -8,11 +8,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-
+import math
 from mtr.models.utils.transformer import transformer_encoder_layer, position_encoding_utils
 from mtr.models.utils import polyline_encoder
 from mtr.utils import common_utils
+# from torch.nn import TransformerEncoderLayer
 # from mtr.ops.knn import knn_utils
+
 
 
 def find_k_nearest_neighbors(pos, K, valid_mask):
@@ -48,8 +50,26 @@ def find_k_nearest_neighbors(pos, K, valid_mask):
     # Find indices of the K-nearest neighbors using topk
     _, indices = torch.topk(pairwise_distances, K, dim=2, largest=False)
 
-    return indices[valid_mask].int()
+    return indices
 
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        half_hidden_dim = d_model // 2
+        scale = 2 * math.pi
+        dim_t = torch.arange(half_hidden_dim)
+        dim_t = 10000 ** (2 * (dim_t // 2) / half_hidden_dim)
+        dim_t_reciprocal = (1 / dim_t) * scale
+        self.register_buffer('dim_t_reciprocal', dim_t_reciprocal)
+
+    def forward(self, pos_tensor):
+        pos_x = pos_tensor[:, :, 0][:, :, None] * self.dim_t_reciprocal
+        pos_y = pos_tensor[:, :, 1][:, :, None] * self.dim_t_reciprocal
+        pos_x = torch.stack((pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()), dim=3).flatten(2)
+        pos_y = torch.stack((pos_y[:, :, 0::2].sin(), pos_y[:, :, 1::2].cos()), dim=3).flatten(2)
+        assert pos_tensor.size(-1) == 2
+        return torch.cat((pos_y, pos_x), dim=2)
 
 class MTREncoder(nn.Module):
     def __init__(self, config):
@@ -73,18 +93,21 @@ class MTREncoder(nn.Module):
 
         # build transformer encoder layers
         self.use_local_attn = self.model_cfg.get('USE_LOCAL_ATTN', False)
+        self.num_heads = self.model_cfg.NUM_ATTN_HEAD
         self_attn_layers = []
         for _ in range(self.model_cfg.NUM_ATTN_LAYERS):
             self_attn_layers.append(self.build_transformer_encoder_layer(
                 d_model=self.model_cfg.D_MODEL,
-                nhead=self.model_cfg.NUM_ATTN_HEAD,
+                nhead=self.num_heads,
                 dropout=self.model_cfg.get('DROPOUT_OF_ATTN', 0.1),
-                normalize_before=False,
+                # normalize_before=False,
                 use_local_attn=self.use_local_attn
             ))
 
         self.self_attn_layers = nn.ModuleList(self_attn_layers)
         self.num_out_channels = self.model_cfg.D_MODEL
+
+        self.pe = PositionalEncoding(self.model_cfg.D_MODEL)
 
     def build_polyline_encoder(self, in_channels, hidden_dim, num_layers, num_pre_layers=1, out_channels=None):
         ret_polyline_encoder = polyline_encoder.PointNetPolylineEncoder(
@@ -96,11 +119,17 @@ class MTREncoder(nn.Module):
         )
         return ret_polyline_encoder
 
-    def build_transformer_encoder_layer(self, d_model, nhead, dropout=0.1, normalize_before=False, use_local_attn=False):
+    def build_transformer_encoder_layer(self, d_model, nhead, dropout=0.1, use_local_attn=False):
         single_encoder_layer = transformer_encoder_layer.TransformerEncoderLayer(
             d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, dropout=dropout,
-            normalize_before=normalize_before, use_local_attn=use_local_attn
+            # use_local_attn=use_local_attn
         )
+
+        # single_encoder_layer = TransformerEncoderLayer(
+        #     d_model=d_model, nhead=nhead, dim_feedforward=d_model * 4, dropout=dropout,
+        #     normalize_before=normalize_before, use_local_attn=use_local_attn
+        # )
+
         return single_encoder_layer
 
     def apply_global_attn(self, x, x_mask, x_pos):
@@ -149,7 +178,7 @@ class MTREncoder(nn.Module):
         x_stack = x_stack_full[x_mask_stack]
         x_pos_stack = x_pos_stack_full[x_mask_stack]
 
-        # It is in shape (BS * N,). It record the batch index of each selected "map feat".
+        # It is in shape (B * N,). It record the batch index of each selected "map feat".
         batch_idxs = batch_idxs_full[x_mask_stack]
 
         # knn
@@ -175,29 +204,98 @@ class MTREncoder(nn.Module):
         #     x_pos_stack, x_pos_stack,  batch_idxs, batch_offsets, num_of_neighbors
         # )  # (num_valid_elems, K)
 
-        # [Number of valid elements, K]
-        index_pair = find_k_nearest_neighbors(pos=x_pos, K=num_of_neighbors, valid_mask=x_mask)
 
-        # positional encoding
-        pos_embedding = position_encoding_utils.gen_sineembed_for_position(x_pos_stack[None, :, 0:2], hidden_dim=d_model)[0]
 
-        # local attn
-        output = x_stack
-        for k in range(len(self.self_attn_layers)):
-            output = self.self_attn_layers[k](
-                src=output,
-                pos=pos_embedding,
-                index_pair=index_pair,
-                query_batch_cnt=batch_cnt,
-                key_batch_cnt=batch_cnt,
-                index_pair_batch=batch_idxs
-            )
+        # Original size is: [Number of valid elements, K]
+        # Now we use its full size: [Batch size, Num objects, K=16]
+        index_pair = find_k_nearest_neighbors(pos=x_pos, K=num_of_neighbors, valid_mask=x_mask).int()
+
+        pos_embedding_full = self._go_pe(x_pos_stack, x_mask, x)
+
+        import time
+        s = time.time()
+        for _ in range(300):
+
+            # positional encoding
+            pos_embedding = position_encoding_utils.gen_sineembed_for_position(x_pos_stack[None, :, 0:2], hidden_dim=d_model)[0]
+            pos_embedding = self._go_pe_old(x_pos_stack)
+            output = self._go_model_old(x_stack, pos_embedding, index_pair, x_mask, batch_cnt, batch_idxs)
+
+
+
+
+            # OURS
+            # attention_valid_mask = self._go_mask(batch_size, N, x, index_pair)
+
+            # output = self._go_model(x, pos_embedding_full, index_pair, batch_cnt, batch_idxs, batch_offsets)
+
+
+        e = time.time()
+        diff = e - s
+
+        print(diff, x.shape)
+        raise ValueError()
 
         ret_full_feature = torch.zeros_like(x_stack_full)  # (batch_size * N, d_model)
         ret_full_feature[x_mask_stack] = output
 
         ret_full_feature = ret_full_feature.view(batch_size, N, d_model)
         return ret_full_feature
+
+
+    def _go_mask(self, batch_size, N, x, index_pair):
+        attention_valid_mask = torch.zeros(batch_size, N, N, dtype=torch.bool, device=x.device)
+        attention_valid_mask.scatter_(2, index_pair, 1)
+        return attention_valid_mask
+
+
+    def _go_pe_old(self, x_pos_stack):
+        # pos_embedding = position_encoding_utils.gen_sineembed_for_position(x_pos[..., 0:2], hidden_dim=d_model)
+        pos_embedding = self.pe(x_pos_stack[None, :, 0:2])[0]
+
+        return pos_embedding
+
+
+    def _go_pe(self, x_pos_stack, x_mask, x):
+        # pos_embedding = position_encoding_utils.gen_sineembed_for_position(x_pos[..., 0:2], hidden_dim=d_model)
+        pos_embedding = self.pe(x_pos_stack[None, :, 0:2])[0]
+        # position_encoding_utils.gen_sineembed_for_position(x_pos_stack[None, :, 0:2], hidden_dim=d_model)[0]
+        pos_embedding_full = torch.empty_like(x)
+        pos_embedding_full[x_mask] = pos_embedding
+        return pos_embedding_full
+
+    def _go_model_old(self, x_stack, pos_embedding, index_pair, x_mask, batch_cnt, batch_idxs):
+        # local attn
+        output = x_stack
+        for k in range(len(self.self_attn_layers)):
+            output = self.self_attn_layers[k](
+                src=output,
+                pos=pos_embedding,
+                index_pair=index_pair[x_mask],
+                query_batch_cnt=batch_cnt,
+                key_batch_cnt=batch_cnt,
+                index_pair_batch=batch_idxs,
+                # attention_valid_mask=attention_valid_mask
+            )
+        return output
+
+    def _go_model(self, x, pos_embedding_full, index_pair, batch_cnt, batch_idxs, batch_offsets):
+        # local attn
+        output = x
+        for k in range(len(self.self_attn_layers)):
+            output = self.self_attn_layers[k](
+                src=output,
+                pos=pos_embedding_full,
+                index_pair=index_pair,
+                batch_offsets=batch_offsets[:-1],
+                # src_mask=~attention_valid_mask,
+                # src_valid_mask=x_mask,
+                # query_batch_cnt=batch_cnt,
+                # key_batch_cnt=batch_cnt,
+                # index_pair_batch=batch_idxs,
+                # attention_valid_mask=attention_valid_mask,
+            )
+        return output
 
     def forward(self, batch_dict):
         """

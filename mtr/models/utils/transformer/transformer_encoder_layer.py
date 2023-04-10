@@ -10,7 +10,7 @@ Reference: https://github.com/dvlab-research/DeepVision3D/blob/master/EQNet/eqne
 
 from typing import Optional, List
 
-
+import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 from .multi_head_attention_local import MultiheadAttentionLocal
@@ -27,18 +27,21 @@ def _get_activation_fn(activation):
         return F.glu
     raise RuntimeError(F"activation should be relu/gelu, not {activation}.")
 
-    
+
+from torch.nn import TransformerEncoderLayer as NativeTransformerEncoderLayer
+
+
 class TransformerEncoderLayer(nn.Module):
     def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1,
-                 activation="relu", normalize_before=False, use_local_attn=False):
+                 activation="relu", use_local_attn=False):
         super().__init__()
         self.use_local_attn = use_local_attn
-        
-        if self.use_local_attn:
-            self.self_attn = MultiheadAttentionLocal(d_model, nhead, dropout=dropout) 
-        else:
-            self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
-        
+
+        # if self.use_local_attn:
+        self.self_attn = MultiheadAttentionLocal(d_model, nhead, dropout=dropout)
+        # else:
+        #     self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
+
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -55,19 +58,89 @@ class TransformerEncoderLayer(nn.Module):
         return tensor if pos is None else tensor + pos
 
     def forward(self,
-                     src,
-                     src_mask: Optional[Tensor] = None,
-                     src_key_padding_mask: Optional[Tensor] = None,
-                     pos: Optional[Tensor] = None, 
-                     index_pair=None, 
-                     query_batch_cnt=None, 
-                     key_batch_cnt=None, 
-                     index_pair_batch=None):
+                src,
+                src_mask: Optional[Tensor] = None,
+                src_key_padding_mask: Optional[Tensor] = None,
+                pos: Optional[Tensor] = None,
+                index_pair=None,
+                query_batch_cnt=None,
+                key_batch_cnt=None,
+                index_pair_batch=None):
         q = k = self.with_pos_embed(src, pos)
         src2 = self.self_attn(q, k, value=src, attn_mask=src_mask,
-                              key_padding_mask=src_key_padding_mask, 
-                              index_pair=index_pair, query_batch_cnt=query_batch_cnt, 
-                              key_batch_cnt=key_batch_cnt, index_pair_batch=index_pair_batch)[0] 
+                              key_padding_mask=src_key_padding_mask,
+                              index_pair=index_pair, query_batch_cnt=query_batch_cnt,
+                              key_batch_cnt=key_batch_cnt, index_pair_batch=index_pair_batch)[0]
+        src = src + self.dropout1(src2)
+        src = self.norm1(src)
+        src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
+        src = src + self.dropout2(src2)
+        src = self.norm2(src)
+        return src
+
+
+
+
+
+class TransformerEncoderLayer222222(NativeTransformerEncoderLayer):
+    def __init__(self, *args, **kwargs):
+        super(TransformerEncoderLayer, self).__init__(*args, batch_first=True, **kwargs)
+
+    def forward(self,
+        src,  # [B, N, D]
+        src_mask: Optional[Tensor] = None,
+        src_key_padding_mask: Optional[Tensor] = None,
+        pos: Optional[Tensor] = None,
+        index_pair=None,
+                batch_offsets=None,
+        # query_batch_cnt=None,
+        # key_batch_cnt=None,
+        # index_pair_batch=None,
+        # src_valid_mask=None,
+        # attention_valid_mask=None,
+    ):
+        B, N, D = src.shape
+        _, _, K = index_pair.shape  # B, N, K
+
+        if pos is None:
+            query = src
+        else:
+            query = src + pos
+
+        # offset = torch.arange(B, device=src.device) * N  # 0, N, 2N, ...
+        # offset = offset.reshape(B, 1, 1).expand(B, N, K)  # In shape [B, N, K]
+
+        # B, N, K, D
+        #                               src in shape [B, N, D] -> [B, N, 1, D]
+        # we expect: value[b, n, k, d] = src[b, index[b, n, k], d]
+        #
+        # torch gather:  out[i, j, k] = src[i, ind[i, j, k], k]
+
+
+
+        # index_flatten = (index_pair + offset).reshape(-1)
+
+        # (BN, D)
+        # key = query.reshape(-1, D)[index_flatten].reshape(B * N, K, D).clone()
+        # value = src.reshape(-1, D)[index_flatten].reshape(B * N, K, D).clone()
+
+
+        key = torch.gather(query.unsqueeze(2).expand(B, N, N, D), dim=2, index=index_pair.unsqueeze(-1).expand(B, N, K, D))
+        value = torch.gather(src.unsqueeze(2).expand(B, N, N, D), dim=2, index=index_pair.unsqueeze(-1).expand(B, N, K, D))
+
+        key = key.reshape(B * N, K, D)
+        value = value.reshape(B * N, K, D)
+        query = query.reshape(B * N, 1, D)
+
+        src2 = self.self_attn(
+            query=query,  # BN, 1, D
+            key=key,  # BN, K, D
+            value=value,  # BN, K, D
+            # key_padding_mask=src_key_padding_mask,
+        )[0]
+
+        src2 = src2.reshape(B, N, D)
+
         src = src + self.dropout1(src2)
         src = self.norm1(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))

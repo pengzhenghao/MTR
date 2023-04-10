@@ -227,6 +227,10 @@ def main():
     # -----------------------start training---------------------------
     logger.info('**********************Start training %s/%s(%s)**********************'
                 % (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
+
+    import time
+    s = time.time()
+
     train_model(
         model,
         optimizer,
@@ -249,6 +253,10 @@ def main():
         cfg=cfg, dist_train=dist_train, logger_iter_interval=args.logger_iter_interval,
         ckpt_save_time_interval=args.ckpt_save_time_interval
     )
+
+    e = time.time()
+
+    print("Spend Time: ", e - s)
 
     logger.info('**********************End training %s/%s(%s)**********************\n\n\n'
                 % (cfg.EXP_GROUP_PATH, cfg.TAG, args.extra_tag))
