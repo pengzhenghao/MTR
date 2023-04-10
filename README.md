@@ -53,15 +53,15 @@ Notably, its variant [`MTR-A`](https://arxiv.org/abs/2209.10033) also **won the 
 #### Performance on the validation set of Waymo Open Motion Dataset
 |  Model  |  Training Set | minADE | minFDE | Miss Rate | mAP |
 |---------|----------------|--------|--------|--------|--------|
-|[MTR](tools/cfgs/waymo/mtr+20_percent_data.yaml)      | 20%            | 0.6697 | 1.3712 | 0.1668 | 0.3437 |
-|[MTR](tools/cfgs/waymo/mtr+100_percent_data.yaml)      | 100%           | 0.6046 | 1.2251 | 0.1366 | 0.4164 |
+|[MTR](tools/cfgs/waymo/20percent.yaml)      | 20%            | 0.6697 | 1.3712 | 0.1668 | 0.3437 |
+|[MTR](tools/cfgs/waymo/100percent.yaml)      | 100%           | 0.6046 | 1.2251 | 0.1366 | 0.4164 |
 |MTR-e2e  | 100%           | 0.5160 | 1.0404 | 0.1234 | 0.3245 |
 
 
 #### Performance on the testing set of Waymo Open Motion Dataset
 |  Model  |  Training Set | minADE | minFDE | Miss Rate | mAP |
 |---------|----------------|--------|--------|--------|--------|
-|[MTR](tools/cfgs/waymo/mtr+100_percent_data.yaml)      | 100%          | 0.6050 | 1.2207 | 0.1351 | 0.4129 |
+|[MTR](tools/cfgs/waymo/100percent.yaml)      | 100%          | 0.6050 | 1.2207 | 0.1351 | 0.4129 |
 |MTR-A (ens) | 100%           | 0.5640 | 1.1344 | 0.1160 | 0.4492 |
 
 
